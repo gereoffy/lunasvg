@@ -112,6 +112,8 @@ void plutovg_span_buffer_extents(plutovg_span_buffer_t* span_buffer, plutovg_rec
 void plutovg_span_buffer_intersect(plutovg_span_buffer_t* span_buffer, const plutovg_span_buffer_t* a, const plutovg_span_buffer_t* b)
 {
     plutovg_span_buffer_reset(span_buffer);
+    if(a->spans.size == 0 || b->spans.size == 0)
+        return;
     plutovg_array_ensure(span_buffer->spans, plutovg_max(a->spans.size, b->spans.size));
 
     plutovg_span_t* a_spans = a->spans.data;
