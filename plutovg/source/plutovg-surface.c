@@ -30,7 +30,7 @@ plutovg_surface_t* plutovg_surface_create(int width, int height)
 {
     plutovg_surface_t* surface = plutovg_surface_create_uninitialized(width, height);
     if(surface)
-        memset(surface->data, 0, surface->height * surface->stride);
+        memset(surface->data, 0, (size_t)surface->height * surface->stride);
     return surface;
 }
 
