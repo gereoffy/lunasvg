@@ -3,6 +3,8 @@
 #include "svgparserutils.h"
 
 #include <cassert>
+#include <climits>
+#include <set>
 
 namespace lunasvg {
 
@@ -714,6 +716,10 @@ bool Document::parse(const char* data, size_t length)
     std::string styleSheet;
     SVGElement* currentElement = nullptr;
     int ignoring = 0;
+    // <switch>: a group of which only the first child whose conditions hold is drawn (Adobe
+    // Illustrator puts every drawing in one, after a foreignObject of its own data); a switch
+    // was an unknown element, dropped with all it holds
+    std::set<const SVGElement*> switches, switchesDecided;
     auto handleText = [&](std::string_view text, bool in_cdata) {
         if(text.empty() || currentElement == nullptr || ignoring > 0)
             return;
@@ -836,6 +842,8 @@ bool Document::parse(const char* data, size_t length)
         if(!readIdentifier(input, buffer))
             return false;
         SVGElement* element = nullptr;
+        SVGElement* inSwitch = nullptr;
+        bool conditionFails = false;
         if(ignoring > 0) {
             ++ignoring;
         } else {
@@ -853,6 +861,10 @@ bool Document::parse(const char* data, size_t length)
                 } else {
                     auto child = SVGElement::create(this, id);
                     element = child.get();
+                    if(switches.count(currentElement))
+                        inSwitch = currentElement;
+                    if(buffer == "switch")
+                        switches.insert(element);
                     currentElement->addChild(std::move(child));
                 }
             }
@@ -874,6 +886,19 @@ bool Document::parse(const char* data, size_t length)
             auto id = PropertyID::Unknown;
             if(element != nullptr)
                 id = propertyid(buffer);
+            if(inSwitch != nullptr) {   // (no extensions are supported; languages: English)
+                auto value = input.substr(0, n);
+                if(buffer == "requiredExtensions" && value.find_first_not_of(" \t\r\n") != std::string_view::npos)
+                    conditionFails = true;
+                if(buffer == "systemLanguage") {
+                    bool english = false;
+                    for(size_t i = 0; i < value.size(); ++i)
+                        if((i == 0 || value[i - 1] == ',' || value[i - 1] == ' ') && value.substr(i, 2) == "en")
+                            english = true;
+                    if(!english)
+                        conditionFails = true;
+                }
+            }
             if(id != PropertyID::Unknown) {
                 decodeText(input.substr(0, n), buffer);
                 if(id == PropertyID::Style) {
@@ -888,6 +913,13 @@ bool Document::parse(const char* data, size_t length)
 
             input.remove_prefix(n + 1);
             skipOptionalSpaces(input);
+        }
+
+        if(inSwitch != nullptr) {
+            if(conditionFails || switchesDecided.count(inSwitch))
+                element->setAttribute(INT_MAX, PropertyID::Display, "none");
+            else
+                switchesDecided.insert(inSwitch);
         }
 
         if(skipDelimiter(input, '>')) {

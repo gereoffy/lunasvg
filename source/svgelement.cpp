@@ -36,6 +36,7 @@ ElementID elementid(std::string_view name)
         {"stop", ElementID::Stop},
         {"style", ElementID::Style},
         {"svg", ElementID::Svg},
+        {"switch", ElementID::G},
         {"symbol", ElementID::Symbol},
         {"text", ElementID::Text},
         {"tspan", ElementID::Tspan},
