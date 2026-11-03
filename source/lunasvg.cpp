@@ -26,6 +26,11 @@ bool lunasvg_add_font_face_from_data(const char* family, bool bold, bool italic,
     return lunasvg::fontFaceCache()->addFontFace(family, bold, italic, lunasvg::FontFace(data, length, destroy_func, closure));
 }
 
+void lunasvg_set_font_face_resolver(lunasvg_font_face_resolver_t resolver, void* closure)
+{
+    lunasvg::fontFaceCache()->setResolver(resolver, closure);
+}
+
 namespace lunasvg {
 
 Bitmap::Bitmap(int width, int height)

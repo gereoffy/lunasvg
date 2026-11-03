@@ -65,6 +65,7 @@ extern "C" {
 
 typedef struct plutovg_surface plutovg_surface_t;
 typedef struct plutovg_matrix plutovg_matrix_t;
+typedef struct plutovg_font_face plutovg_font_face_t;
 
 /**
  * @brief Callback for cleaning up resources.
@@ -125,6 +126,24 @@ LUNASVG_API bool lunasvg_add_font_face_from_file(const char* family, bool bold, 
 * @return `true` if the font face was successfully added to the cache, `false` otherwise.
 */
 LUNASVG_API bool lunasvg_add_font_face_from_data(const char* family, bool bold, bool italic, const void* data, size_t length, lunasvg_destroy_func_t destroy_func, void* closure);
+
+/**
+* @brief A font lookup of the application's own.
+* @param closure The pointer given to lunasvg_set_font_face_resolver().
+* @param family The family as the document names it (a generic name such as "sans-serif" too), or an empty string for the default font.
+* @param bold Whether a bold face is wanted.
+* @param italic Whether an italic face is wanted.
+* @return The face to use, or `NULL` if there is none; the library takes a reference of its own.
+*/
+typedef plutovg_font_face_t* (*lunasvg_font_face_resolver_t)(void* closure, const char* family, bool bold, bool italic);
+
+/**
+* @brief Set a font lookup of the application's own: every font a document needs is asked from it instead of
+* the library's cache, which then need not load the system's fonts (LUNASVG_DISABLE_LOAD_SYSTEM_FONTS).
+* @param resolver The lookup, or `NULL` to use the library's cache again.
+* @param closure User-defined pointer passed to the resolver.
+*/
+LUNASVG_API void lunasvg_set_font_face_resolver(lunasvg_font_face_resolver_t resolver, void* closure);
 
 #ifdef __cplusplus
 }

@@ -421,6 +421,12 @@ bool FontFaceCache::addFontFace(const std::string& family, bool bold, bool itali
 
 FontFace FontFaceCache::getFontFace(const std::string& family, bool bold, bool italic) const
 {
+    if(m_resolver) {
+        if(auto face = m_resolver(m_closure, family.data(), bold, italic))
+            return FontFace(face);
+        return FontFace();
+    }
+
     if(auto face = plutovg_font_face_cache_get(m_cache, family.data(), bold, italic)) {
         return FontFace(face);
     }

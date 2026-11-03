@@ -421,12 +421,15 @@ class FontFaceCache {
 public:
     bool addFontFace(const std::string& family, bool bold, bool italic, const FontFace& face);
     FontFace getFontFace(const std::string& family, bool bold, bool italic) const;
+    void setResolver(plutovg_font_face_t* (*resolver)(void*, const char*, bool, bool), void* closure) { m_resolver = resolver; m_closure = closure; }
 
     ~FontFaceCache();
 
 private:
     FontFaceCache();
     plutovg_font_face_cache_t* m_cache;
+    plutovg_font_face_t* (*m_resolver)(void*, const char*, bool, bool) = nullptr;
+    void* m_closure = nullptr;
     friend FontFaceCache* fontFaceCache();
 };
 
