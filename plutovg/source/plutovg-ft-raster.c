@@ -60,8 +60,13 @@
 
 #include <setjmp.h>
 
+#ifdef __APPLE__   /* (setjmp saves the signal mask there: a system call per rendering) */
+#define pvg_ft_setjmp   _setjmp
+#define pvg_ft_longjmp  _longjmp
+#else
 #define pvg_ft_setjmp   setjmp
 #define pvg_ft_longjmp  longjmp
+#endif
 #define pvg_ft_jmp_buf  jmp_buf
 
 #include <stddef.h>
