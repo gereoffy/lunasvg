@@ -1,4 +1,6 @@
 #include "plutovg-private.h"
+
+#include <stdatomic.h>
 #include "plutovg-utils.h"
 
 #include <stdio.h>
@@ -130,6 +132,24 @@ typedef mtx_t plutovg_mutex_t;
 #define plutovg_mutex_unlock(mutex) mtx_unlock(mutex)
 #define plutovg_mutex_destroy(mutex) mtx_destroy(mutex)
 
+#elif defined(__unix__) || defined(__APPLE__)
+
+#include <pthread.h>
+
+typedef pthread_mutex_t plutovg_mutex_t;
+
+static void plutovg_mutex_init(pthread_mutex_t* mutex)
+{
+    pthread_mutexattr_t attr;
+    pthread_mutexattr_init(&attr);
+    pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_RECURSIVE);
+    pthread_mutex_init(mutex, &attr);
+    pthread_mutexattr_destroy(&attr);
+}
+#define plutovg_mutex_lock(mutex) pthread_mutex_lock(mutex)
+#define plutovg_mutex_unlock(mutex) pthread_mutex_unlock(mutex)
+#define plutovg_mutex_destroy(mutex) pthread_mutex_destroy(mutex)
+
 #else
 
 typedef int plutovg_mutex_t;
@@ -152,13 +172,21 @@ typedef struct plutovg_glyph {
     int y1;
     int x2;
     int y2;
-    struct plutovg_glyph* next;
+    _Atomic(struct plutovg_glyph*) next;
 } plutovg_glyph_t;
 
-typedef struct {
-    plutovg_glyph_t** glyphs;
-    size_t size;
+// The glyphs of a face, a hash table read without the lock: a glyph is published complete (release),
+// a full table is replaced by a larger one and kept (retired) until the face is destroyed, so a
+// reader never sees freed memory; one that misses a glyph moved meanwhile looks again under the lock.
+typedef struct plutovg_glyph_table {
     size_t capacity;
+    struct plutovg_glyph_table* retired;
+    _Atomic(plutovg_glyph_t*) slots[];
+} plutovg_glyph_table_t;
+
+typedef struct {
+    _Atomic(plutovg_glyph_table_t*) table;
+    size_t size;
 } plutovg_glyph_cache_t;
 
 struct plutovg_font_face {
@@ -179,29 +207,33 @@ struct plutovg_font_face {
 
 static void plutovg_glyph_cache_init(plutovg_glyph_cache_t* cache)
 {
-    cache->glyphs = NULL;
+    atomic_init(&cache->table, NULL);
     cache->size = 0;
-    cache->capacity = 0;
 }
 
 static void plutovg_glyph_cache_finish(plutovg_glyph_cache_t* cache, plutovg_font_face_t* face)
 {
     plutovg_mutex_lock(&face->mutex);
 
-    if(cache->glyphs) {
-        for(size_t i = 0; i < cache->capacity; ++i) {
-            plutovg_glyph_t* glyph = cache->glyphs[i];
+    plutovg_glyph_table_t* table = atomic_load_explicit(&cache->table, memory_order_relaxed);
+    if(table) {
+        for(size_t i = 0; i < table->capacity; ++i) {
+            plutovg_glyph_t* glyph = atomic_load_explicit(&table->slots[i], memory_order_relaxed);
             while(glyph) {
-                plutovg_glyph_t* next = glyph->next;
+                plutovg_glyph_t* next = atomic_load_explicit(&glyph->next, memory_order_relaxed);
                 stbtt_FreeShape(&face->info, glyph->vertices);
                 free(glyph);
                 glyph = next;
             }
         }
 
-        free(cache->glyphs);
-        cache->glyphs = NULL;
-        cache->capacity = 0;
+        while(table) {
+            plutovg_glyph_table_t* retired = table->retired;
+            free(table);
+            table = retired;
+        }
+
+        atomic_store_explicit(&cache->table, NULL, memory_order_relaxed);
         cache->size = 0;
     }
 
@@ -210,22 +242,42 @@ static void plutovg_glyph_cache_finish(plutovg_glyph_cache_t* cache, plutovg_fon
 
 #define GLYPH_CACHE_INIT_CAPACITY 128
 
+static plutovg_glyph_table_t* plutovg_glyph_table_create(size_t capacity, plutovg_glyph_table_t* retired)
+{
+    plutovg_glyph_table_t* table = malloc(sizeof(plutovg_glyph_table_t) + capacity * sizeof(_Atomic(plutovg_glyph_t*)));
+    table->capacity = capacity;
+    table->retired = retired;
+    for(size_t i = 0; i < capacity; ++i)
+        atomic_init(&table->slots[i], NULL);
+    return table;
+}
+
+static plutovg_glyph_t* plutovg_glyph_table_find(plutovg_glyph_table_t* table, plutovg_codepoint_t codepoint)
+{
+    if(table == NULL)
+        return NULL;
+    plutovg_glyph_t* glyph = atomic_load_explicit(&table->slots[codepoint & (table->capacity - 1)], memory_order_acquire);
+    while(glyph && glyph->codepoint != codepoint)
+        glyph = atomic_load_explicit(&glyph->next, memory_order_acquire);
+    return glyph;
+}
+
 static plutovg_glyph_t* plutovg_glyph_cache_get(plutovg_glyph_cache_t* cache, plutovg_font_face_t* face, plutovg_codepoint_t codepoint)
 {
+    plutovg_glyph_t* glyph = plutovg_glyph_table_find(atomic_load_explicit(&cache->table, memory_order_acquire), codepoint);
+    if(glyph)
+        return glyph;
+
     plutovg_mutex_lock(&face->mutex);
 
-    if(cache->glyphs == NULL) {
+    plutovg_glyph_table_t* table = atomic_load_explicit(&cache->table, memory_order_relaxed);
+    if(table == NULL) {
         assert(cache->size == 0);
-        cache->glyphs = calloc(GLYPH_CACHE_INIT_CAPACITY, sizeof(plutovg_glyph_t*));
-        cache->capacity = GLYPH_CACHE_INIT_CAPACITY;
+        table = plutovg_glyph_table_create(GLYPH_CACHE_INIT_CAPACITY, NULL);
+        atomic_store_explicit(&cache->table, table, memory_order_release);
     }
 
-    size_t index = codepoint & (cache->capacity - 1);
-    plutovg_glyph_t* glyph = cache->glyphs[index];
-    while(glyph && glyph->codepoint != codepoint) {
-        glyph = glyph->next;
-    }
-
+    glyph = plutovg_glyph_table_find(table, codepoint);
     if(glyph == NULL) {
         glyph = malloc(sizeof(plutovg_glyph_t));
         glyph->codepoint = codepoint;
@@ -236,28 +288,25 @@ static plutovg_glyph_t* plutovg_glyph_cache_get(plutovg_glyph_cache_t* cache, pl
             glyph->x1 = glyph->y1 = glyph->x2 = glyph->y2 = 0;
         }
 
-        glyph->next = cache->glyphs[index];
-        cache->glyphs[index] = glyph;
+        _Atomic(plutovg_glyph_t*)* slot = &table->slots[codepoint & (table->capacity - 1)];
+        atomic_init(&glyph->next, atomic_load_explicit(slot, memory_order_relaxed));
+        atomic_store_explicit(slot, glyph, memory_order_release);
         cache->size += 1;
 
-        if(cache->size > (cache->capacity * 3 / 4)) {
-            size_t newcapacity = cache->capacity << 1;
-            plutovg_glyph_t** newglyphs = calloc(newcapacity, sizeof(plutovg_glyph_t*));
-
-            for(size_t i = 0; i < cache->capacity; ++i) {
-                plutovg_glyph_t* entry = cache->glyphs[i];
+        if(cache->size > (table->capacity * 3 / 4)) {
+            plutovg_glyph_table_t* newtable = plutovg_glyph_table_create(table->capacity << 1, table);
+            for(size_t i = 0; i < table->capacity; ++i) {
+                plutovg_glyph_t* entry = atomic_load_explicit(&table->slots[i], memory_order_relaxed);
                 while(entry) {
-                    plutovg_glyph_t* next = entry->next;
-                    size_t newindex = entry->codepoint & (newcapacity - 1);
-                    entry->next = newglyphs[newindex];
-                    newglyphs[newindex] = entry;
+                    plutovg_glyph_t* next = atomic_load_explicit(&entry->next, memory_order_relaxed);
+                    _Atomic(plutovg_glyph_t*)* newslot = &newtable->slots[entry->codepoint & (newtable->capacity - 1)];
+                    atomic_store_explicit(&entry->next, atomic_load_explicit(newslot, memory_order_relaxed), memory_order_relaxed);
+                    atomic_store_explicit(newslot, entry, memory_order_relaxed);
                     entry = next;
                 }
             }
 
-            free(cache->glyphs);
-            cache->glyphs = newglyphs;
-            cache->capacity = newcapacity;
+            atomic_store_explicit(&cache->table, newtable, memory_order_release);
         }
     }
 
