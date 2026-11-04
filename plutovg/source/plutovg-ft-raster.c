@@ -81,6 +81,7 @@ typedef ptrdiff_t  PVG_FT_PtrDist;
 
 #include <stdlib.h>
 #include <limits.h>
+#include <math.h>
 
 #define PVG_FT_MINIMUM_POOL_SIZE (1024 * 8)
 #define PVG_FT_MAXIMUM_POOL_SIZE (1024 * 1024 * 8)
@@ -156,6 +157,7 @@ PVG_FT_END_STMNT
     int    cover;
     TArea  area;
     PCell  next;
+    PCell  prev;   /* (the row's list both ways: a cell is looked for from the last one) */
 
   } TCell;
 
@@ -199,6 +201,7 @@ PVG_FT_END_STMNT
     long        buffer_size;
 
     PCell*     ycells;
+    PCell*     yhints;   /* each row's cell used last */
     TPos       ycount;
   } TWorker, *PWorker;
 
@@ -215,6 +218,7 @@ PVG_FT_END_STMNT
     ras.buffer_size = byte_size;
 
     ras.ycells      = (PCell*) buffer;
+    ras.yhints      = NULL;
     ras.cells       = NULL;
     ras.max_cells   = 0;
     ras.num_cells   = 0;
@@ -275,38 +279,71 @@ PVG_FT_END_STMNT
   static PCell
   gray_find_cell( RAS_ARG )
   {
-    PCell  *pcell, cell;
+    PCell  cell, prev, hint;
     TPos    x = ras.ex;
 
 
     if ( x > ras.count_ex )
       x = ras.count_ex;
 
-    pcell = &ras.ycells[ras.ey];
-    for (;;)
+    /* The row's list is sorted by x; it is searched from the cell used  */
+    /* last in the row, forwards or backwards: an edge's cells follow    */
+    /* each other, and searching from the row's start took the square of */
+    /* the cells in a row (long lines, dense hatchings and grids)        */
+    hint = ras.yhints[ras.ey];
+    if ( hint && hint->x > x )
     {
-      cell = *pcell;
-      if ( cell == NULL || cell->x > x )
-        break;
-
-      if ( cell->x == x )
+      cell = hint;
+      prev = hint->prev;
+      while ( prev && prev->x > x )
+      {
+        cell = prev;
+        prev = prev->prev;
+      }
+      if ( prev && prev->x == x )
+      {
+        cell = prev;
         goto Exit;
-
-      pcell = &cell->next;
+      }
+    }
+    else
+    {
+      prev = hint;
+      cell = hint ? hint : ras.ycells[ras.ey];
+      while ( cell && cell->x < x )
+      {
+        prev = cell;
+        cell = cell->next;
+      }
+      if ( cell && cell->x == x )
+        goto Exit;
     }
 
+    /* a new cell between prev and cell */
     if ( ras.num_cells >= ras.max_cells )
       pvg_ft_longjmp( ras.jump_buffer, 1 );
 
-    cell        = ras.cells + ras.num_cells++;
-    cell->x     = x;
-    cell->area  = 0;
-    cell->cover = 0;
+    {
+      PCell  next = cell;
 
-    cell->next  = *pcell;
-    *pcell      = cell;
+
+      cell        = ras.cells + ras.num_cells++;
+      cell->x     = x;
+      cell->area  = 0;
+      cell->cover = 0;
+
+      cell->next  = next;
+      cell->prev  = prev;
+      if ( next )
+        next->prev = cell;
+      if ( prev )
+        prev->next = cell;
+      else
+        ras.ycells[ras.ey] = cell;
+    }
 
   Exit:
+    ras.yhints[ras.ey] = cell;
     return cell;
   }
 
@@ -1739,8 +1776,9 @@ void PVG_FT_Outline_Get_CBox(const PVG_FT_Outline* outline, PVG_FT_BBox* acbox)
 
           ras.ycells = (PCell*)ras.buffer;
           ras.ycount = band->max - band->min;
+          ras.yhints = ras.ycells + ras.ycount;
 
-          cell_start = sizeof ( PCell ) * ras.ycount;
+          cell_start = 2 * sizeof ( PCell ) * ras.ycount;
           cell_mod   = cell_start % sizeof ( TCell );
           if ( cell_mod > 0 )
             cell_start += sizeof ( TCell ) - cell_mod;
@@ -1757,8 +1795,8 @@ void PVG_FT_Outline_Get_CBox(const PVG_FT_Outline* outline, PVG_FT_BBox* acbox)
           if ( ras.max_cells < 2 )
             goto ReduceBands;
 
-          for ( yindex = 0; yindex < ras.ycount; yindex++ )
-            ras.ycells[yindex] = NULL;
+          for ( yindex = 0; yindex < 2 * ras.ycount; yindex++ )
+            ras.ycells[yindex] = NULL;   /* (and the hints) */
         }
 
         ras.num_cells = 0;
@@ -1871,16 +1909,85 @@ void PVG_FT_Outline_Get_CBox(const PVG_FT_Outline* outline, PVG_FT_BBox* acbox)
     return gray_convert_glyph( RAS_VAR );
   }
 
+  /* The pool the cells of an outline need at most: a cell for each pixel */
+  /* its edges cross (their length in x plus in y; a curve's is at most   */
+  /* its control polygon's) and two at each point, at most one for each   */
+  /* pixel of its box within the clip box, and the rows' lists. A pool    */
+  /* too small for a scanline started the whole outline again with one    */
+  /* twice as large, from 8 KB: dense outlines were rasterized ten times. */
+  static size_t
+  gray_pool_size( const PVG_FT_Raster_Params*  params )
+  {
+    const PVG_FT_Outline*  outline = (const PVG_FT_Outline*)params->source;
+    double  length = 0, cells, area;
+    long    xmin, ymin, xmax, ymax;
+    int     c, first = 0;
+
+
+    if ( outline == NULL || outline->n_points <= 0 || outline->n_contours <= 0 )
+      return 0;
+
+    xmin = xmax = outline->points[0].x;
+    ymin = ymax = outline->points[0].y;
+    for ( c = 0; c < outline->n_contours; c++ )
+    {
+      int  last = outline->contours[c], i;
+
+
+      if ( last < first || last >= outline->n_points )
+        return 0;
+      for ( i = first; i <= last; i++ )
+      {
+        const PVG_FT_Vector*  p = &outline->points[i];
+        const PVG_FT_Vector*  q = &outline->points[i < last ? i + 1 : first];
+
+
+        length += fabs( (double)q->x - p->x ) + fabs( (double)q->y - p->y );
+        if ( p->x < xmin ) xmin = p->x;
+        if ( p->x > xmax ) xmax = p->x;
+        if ( p->y < ymin ) ymin = p->y;
+        if ( p->y > ymax ) ymax = p->y;
+      }
+      first = last + 1;
+    }
+
+    xmin >>= 6, ymin >>= 6, xmax = ( xmax + 63 ) >> 6, ymax = ( ymax + 63 ) >> 6;
+    if ( params->flags & PVG_FT_RASTER_FLAG_CLIP )
+    {
+      if ( xmin < params->clip_box.xMin ) xmin = params->clip_box.xMin;
+      if ( ymin < params->clip_box.yMin ) ymin = params->clip_box.yMin;
+      if ( xmax > params->clip_box.xMax ) xmax = params->clip_box.xMax;
+      if ( ymax > params->clip_box.yMax ) ymax = params->clip_box.yMax;
+    }
+    if ( xmax <= xmin || ymax <= ymin )
+      return 0;
+
+    cells = length / 64 + 2.0 * outline->n_points;
+    area  = ( (double)( xmax - xmin ) + 1 ) * (double)( ymax - ymin );
+    if ( cells > area )
+      cells = area;
+    cells += (double)( ymax - ymin );   /* (those left of the clip box, one a row) */
+    return (size_t)fmin( cells * sizeof ( TCell ) + 2.0 * sizeof ( PCell ) * (double)( ymax - ymin + 2 ) + 4096,
+                         (double)PVG_FT_MAXIMUM_POOL_SIZE );
+  }
+
   void
   PVG_FT_Raster_Render(const PVG_FT_Raster_Params *params)
   {
       char stack[PVG_FT_MINIMUM_POOL_SIZE];
-      size_t length = PVG_FT_MINIMUM_POOL_SIZE;
+      size_t length = gray_pool_size(params);
+      void* pool = stack;
+      if(length > PVG_FT_MINIMUM_POOL_SIZE && (pool = malloc(length)) == NULL)
+          pool = stack;
+      if(pool == stack)
+          length = PVG_FT_MINIMUM_POOL_SIZE;
 
       TWorker worker;
       worker.skip_spans = 0;
       int rendered_spans = 0;
-      int error = gray_raster_render(&worker, stack, length, params);
+      int error = gray_raster_render(&worker, pool, length, params);
+      if(pool != stack)
+          free(pool);
       while(error == ErrRaster_OutOfMemory) {
           length *= 2;
           if(length > PVG_FT_MAXIMUM_POOL_SIZE)
