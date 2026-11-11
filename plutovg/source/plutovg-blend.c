@@ -766,6 +766,31 @@ static void blend_untransformed_argb(plutovg_surface_t* surface, plutovg_operato
 }
 
 #define FIXED_SCALE (1 << 16)
+
+static inline uint32_t interpolate_4_pixels(uint32_t tl, uint32_t tr, uint32_t bl, uint32_t br, uint32_t distx, uint32_t disty)
+{
+    uint32_t idistx = 256 - distx;
+    uint32_t idisty = 256 - disty;
+    uint32_t xtop = INTERPOLATE_PIXEL_256(tl, idistx, tr, distx);
+    uint32_t xbot = INTERPOLATE_PIXEL_256(bl, idistx, br, distx);
+    return INTERPOLATE_PIXEL_256(xtop, idisty, xbot, disty);
+}
+
+#define HALF_POINT (1 << 15)
+
+/* The texel at (x, y) (16.16) interpolated from the four around it, the edge texels repeated
+   beyond the image */
+static inline uint32_t fetch_bilinear(const texture_data_t* texture, int x, int y)
+{
+    x -= HALF_POINT;
+    y -= HALF_POINT;
+    const int w = texture->width - 1, h = texture->height - 1;
+    int x1 = plutovg_clamp(x >> 16, 0, w), x2 = plutovg_clamp((x >> 16) + 1, 0, w);
+    int y1 = plutovg_clamp(y >> 16, 0, h), y2 = plutovg_clamp((y >> 16) + 1, 0, h);
+    const uint32_t* s1 = (const uint32_t*)(texture->data + y1 * texture->stride);
+    const uint32_t* s2 = (const uint32_t*)(texture->data + y2 * texture->stride);
+    return interpolate_4_pixels(s1[x1], s1[x2], s2[x1], s2[x2], (x & 0xffff) >> 8, (y & 0xffff) >> 8);
+}
 static void blend_transformed_argb(plutovg_surface_t* surface, plutovg_operator_t op, const texture_data_t* texture, const plutovg_span_buffer_t* span_buffer)
 {
     composition_function_t func = composition_table[op];
@@ -776,6 +801,11 @@ static void blend_transformed_argb(plutovg_surface_t* surface, plutovg_operator_
 
     int fdx = (int)(texture->matrix.a * FIXED_SCALE);
     int fdy = (int)(texture->matrix.b * FIXED_SCALE);
+    /* drawn smaller than its texels (more than one per pixel either way): interpolated, so that
+       thin lines and small letters do not break up where the nearest texel skips some of them;
+       larger: the nearest texel, sharp */
+    const bool reduced = fabsf(texture->matrix.a) + fabsf(texture->matrix.b) > 1.f
+        || fabsf(texture->matrix.c) + fabsf(texture->matrix.d) > 1.f;
 
     int count = span_buffer->spans.size;
     const plutovg_span_t* spans = span_buffer->spans.data;
@@ -799,6 +829,8 @@ static void blend_transformed_argb(plutovg_surface_t* surface, plutovg_operator_
                 int py = y >> 16;
                 if((px < 0) || (px >= image_width) || (py < 0) || (py >= image_height)) {
                     *b = 0x00000000;
+                } else if(reduced) {
+                    *b = fetch_bilinear(texture, x, y);
                 } else {
                     *b = ((const uint32_t*)(texture->data + py * texture->stride))[px];
                 }
@@ -923,16 +955,6 @@ static void blend_transformed_tiled_argb(plutovg_surface_t* surface, plutovg_ope
     }
 }
 
-static inline uint32_t interpolate_4_pixels(uint32_t tl, uint32_t tr, uint32_t bl, uint32_t br, uint32_t distx, uint32_t disty)
-{
-    uint32_t idistx = 256 - distx;
-    uint32_t idisty = 256 - disty;
-    uint32_t xtop = INTERPOLATE_PIXEL_256(tl, idistx, tr, distx);
-    uint32_t xbot = INTERPOLATE_PIXEL_256(bl, idistx, br, distx);
-    return INTERPOLATE_PIXEL_256(xtop, idisty, xbot, disty);
-}
-
-#define HALF_POINT (1 << 15)
 static void blend_transformed_bilinear_tiled_argb(plutovg_surface_t* surface, plutovg_operator_t op, const texture_data_t* texture, const plutovg_span_buffer_t* span_buffer)
 {
     composition_function_t func = composition_table[op];
