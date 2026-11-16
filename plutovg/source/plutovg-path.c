@@ -915,6 +915,8 @@ bool plutovg_path_parse(plutovg_path_t* path, const char* data, int length)
                 plutovg_path_close(path); // a repeated closepath is valid and changes nothing
             current_x = start_x;
             current_y = start_y;
+            if(it < end && !PLUTOVG_IS_ALPHA(*it))
+                return false; // only a command may follow a closepath (anything else would be read as one more, forever)
         } else {
             return false;
         }
