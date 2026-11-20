@@ -281,7 +281,7 @@ static plutovg_glyph_t* plutovg_glyph_cache_get(plutovg_glyph_cache_t* cache, pl
     if(glyph == NULL) {
         glyph = malloc(sizeof(plutovg_glyph_t));
         glyph->codepoint = codepoint;
-        glyph->index = stbtt_FindGlyphIndex(&face->info, codepoint);
+        glyph->index = plutovg_font_face_get_glyph_index(face, codepoint);
         glyph->nvertices = stbtt_GetGlyphShape(&face->info, glyph->index, &glyph->vertices);
         stbtt_GetGlyphHMetrics(&face->info, glyph->index, &glyph->advance_width, &glyph->left_side_bearing);
         if(!stbtt_GetGlyphBox(&face->info, glyph->index, &glyph->x1, &glyph->y1, &glyph->x2, &glyph->y2)) {
@@ -390,6 +390,11 @@ void plutovg_font_face_destroy(plutovg_font_face_t* face)
 int plutovg_font_face_get_reference_count(const plutovg_font_face_t* face)
 {
     return plutovg_get_reference_count(face);
+}
+
+int plutovg_font_face_get_glyph_index(const plutovg_font_face_t* face, plutovg_codepoint_t codepoint)
+{
+    return stbtt_FindGlyphIndex(&face->info, codepoint);
 }
 
 static float plutovg_font_face_get_scale(const plutovg_font_face_t* face, float size)

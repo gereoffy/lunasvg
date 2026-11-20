@@ -829,6 +829,9 @@ PLUTOVG_API void plutovg_font_face_destroy(plutovg_font_face_t* face);
  */
 PLUTOVG_API int plutovg_font_face_get_reference_count(const plutovg_font_face_t* face);
 
+/** Returns the glyph index for a code point, or zero if it is missing. */
+PLUTOVG_API int plutovg_font_face_get_glyph_index(const plutovg_font_face_t* face, plutovg_codepoint_t codepoint);
+
 /**
  * @brief Retrieves metrics for a font face at a specified size.
  *
