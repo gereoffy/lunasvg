@@ -300,7 +300,9 @@ static plutovg_glyph_t* plutovg_glyph_cache_get(plutovg_glyph_cache_t* cache, pl
                 while(entry) {
                     plutovg_glyph_t* next = atomic_load_explicit(&entry->next, memory_order_relaxed);
                     _Atomic(plutovg_glyph_t*)* newslot = &newtable->slots[entry->codepoint & (newtable->capacity - 1)];
-                    atomic_store_explicit(&entry->next, atomic_load_explicit(newslot, memory_order_relaxed), memory_order_relaxed);
+                    // (release: a reader still walking the old table's chain may reach a glyph through this pointer
+                    // without reading the new table, so the glyph's fields must be published by this store too)
+                    atomic_store_explicit(&entry->next, atomic_load_explicit(newslot, memory_order_relaxed), memory_order_release);
                     atomic_store_explicit(newslot, entry, memory_order_relaxed);
                     entry = next;
                 }
