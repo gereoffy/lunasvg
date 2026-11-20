@@ -1,6 +1,7 @@
 #ifndef LUNASVG_GRAPHICS_H
 #define LUNASVG_GRAPHICS_H
 
+#include <lunasvg.h>
 #include <plutovg.h>
 
 #include <cstdint>
@@ -420,15 +421,17 @@ private:
 class FontFaceCache {
 public:
     bool addFontFace(const std::string& family, bool bold, bool italic, const FontFace& face);
-    FontFace getFontFace(const std::string& family, bool bold, bool italic) const;
-    void setResolver(plutovg_font_face_t* (*resolver)(void*, const char*, bool, bool), void* closure) { m_resolver = resolver; m_closure = closure; }
+    FontFace getFontFace(const std::string& family, int weight, bool italic) const;
+    void setResolver(lunasvg_font_face_resolver_t resolver, void* closure) { m_resolver = resolver; m_weightedResolver = nullptr; m_closure = closure; }
+    void setWeightedResolver(lunasvg_weighted_font_face_resolver_t resolver, void* closure) { m_weightedResolver = resolver; m_resolver = nullptr; m_closure = closure; }
 
     ~FontFaceCache();
 
 private:
     FontFaceCache();
     plutovg_font_face_cache_t* m_cache;
-    plutovg_font_face_t* (*m_resolver)(void*, const char*, bool, bool) = nullptr;
+    lunasvg_font_face_resolver_t m_resolver = nullptr;
+    lunasvg_weighted_font_face_resolver_t m_weightedResolver = nullptr;
     void* m_closure = nullptr;
     friend FontFaceCache* fontFaceCache();
 };

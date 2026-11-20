@@ -228,25 +228,19 @@ static PointerEvents parsePointerEvents(std::string_view input)
     return parseEnumValue(input, entries, PointerEvents::Auto);
 }
 
-static FontWeight parseFontWeight(std::string_view input)
+static int parseFontWeight(std::string_view input, int inherited)
 {
-    static const SVGEnumerationEntry<FontWeight> entries[] = {
-        {FontWeight::Normal, "normal"},
-        {FontWeight::Bold, "bold"},
-        {FontWeight::Bold, "bolder"},
-        {FontWeight::Normal, "lighter"},
-        {FontWeight::Normal, "100"},
-        {FontWeight::Normal, "200"},
-        {FontWeight::Normal, "300"},
-        {FontWeight::Normal, "400"},
-        {FontWeight::Normal, "500"},
-        {FontWeight::Bold, "600"},
-        {FontWeight::Bold, "700"},
-        {FontWeight::Bold, "800"},
-        {FontWeight::Bold, "900"}
-    };
+    if(input == "bold")
+        return 700;
+    if(input == "bolder")
+        return inherited < 350 ? 400 : inherited < 550 ? 700 : std::max(900, inherited);
+    if(input == "lighter")
+        return inherited < 550 ? std::min(100, inherited) : inherited < 750 ? 400 : 700;
 
-    return parseEnumValue(input, entries, FontWeight::Normal);
+    float weight = 0.f;
+    if(parseNumber(input, weight) && input.empty() && weight >= 1.f && weight <= 1000.f)
+        return static_cast<int>(weight + .5f);
+    return 400;
 }
 
 static FontStyle parseFontStyle(std::string_view input)
@@ -507,7 +501,7 @@ SVGLayoutState::SVGLayoutState(const SVGLayoutState& parent, const SVGElement* e
             m_clip_rule = parseFillRule(input);
             break;
         case PropertyID::Font_Weight:
-            m_font_weight = parseFontWeight(input);
+            m_font_weight = parseFontWeight(input, m_font_weight);
             break;
         case PropertyID::Font_Style:
             m_font_style = parseFontStyle(input);
@@ -574,7 +568,6 @@ SVGLayoutState::SVGLayoutState(const SVGLayoutState& parent, const SVGElement* e
 
 Font SVGLayoutState::font() const
 {
-    auto bold = m_font_weight == FontWeight::Bold;
     auto italic = m_font_style == FontStyle::Italic;
 
     FontFace face;
@@ -595,12 +588,12 @@ Font SVGLayoutState::font() const
 
         std::string font_family(family);
         if(!font_family.empty()) {
-            face = fontFaceCache()->getFontFace(font_family, bold, italic);
+            face = fontFaceCache()->getFontFace(font_family, m_font_weight, italic);
         }
     }
 
     if(face.isNull())
-        face = fontFaceCache()->getFontFace(emptyString, bold, italic);
+        face = fontFaceCache()->getFontFace(emptyString, m_font_weight, italic);
     return Font(face, m_font_size);
 }
 

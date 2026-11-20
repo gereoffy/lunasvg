@@ -31,6 +31,11 @@ void lunasvg_set_font_face_resolver(lunasvg_font_face_resolver_t resolver, void*
     lunasvg::fontFaceCache()->setResolver(resolver, closure);
 }
 
+void lunasvg_set_weighted_font_face_resolver(lunasvg_weighted_font_face_resolver_t resolver, void* closure)
+{
+    lunasvg::fontFaceCache()->setWeightedResolver(resolver, closure);
+}
+
 namespace lunasvg {
 
 Bitmap::Bitmap(int width, int height)

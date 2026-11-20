@@ -419,8 +419,12 @@ bool FontFaceCache::addFontFace(const std::string& family, bool bold, bool itali
     return !face.isNull();
 }
 
-FontFace FontFaceCache::getFontFace(const std::string& family, bool bold, bool italic) const
+FontFace FontFaceCache::getFontFace(const std::string& family, int weight, bool italic) const
 {
+    if(m_weightedResolver)
+        return FontFace(m_weightedResolver(m_closure, family.data(), weight, italic));
+
+    const auto bold = weight >= 600;
     if(m_resolver) {
         if(auto face = m_resolver(m_closure, family.data(), bold, italic))
             return FontFace(face);

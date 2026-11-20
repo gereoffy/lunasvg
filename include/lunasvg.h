@@ -145,6 +145,10 @@ typedef plutovg_font_face_t* (*lunasvg_font_face_resolver_t)(void* closure, cons
 */
 LUNASVG_API void lunasvg_set_font_face_resolver(lunasvg_font_face_resolver_t resolver, void* closure);
 
+/** A resolver that receives the CSS font weight (400 normal, 700 bold). */
+typedef plutovg_font_face_t* (*lunasvg_weighted_font_face_resolver_t)(void* closure, const char* family, int weight, bool italic);
+LUNASVG_API void lunasvg_set_weighted_font_face_resolver(lunasvg_weighted_font_face_resolver_t resolver, void* closure);
+
 #ifdef __cplusplus
 }
 #endif
