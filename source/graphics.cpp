@@ -480,9 +480,11 @@ FontFaceCache* fontFaceCache()
     return &cache;
 }
 
-Font::Font(const FontFace& face, float size)
-    : m_face(face), m_size(size)
+Font::Font(const FontFace& face, float size, const std::string& families, int weight, bool italic)
+    : m_face(face), m_weight(weight), m_italic(italic), m_size(size)
 {
+    if(fontFaceCache()->hasGlyphResolver())
+        m_families = families;
     if(m_size > 0.f && !m_face.isNull()) {
         plutovg_font_face_get_metrics(m_face.get(), m_size, &m_ascent, &m_descent, &m_lineGap, nullptr);
     }
@@ -498,9 +500,9 @@ float Font::xHeight() const
 
 float Font::measureText(const std::u32string_view& text) const
 {
-    if(m_size > 0.f && !m_face.isNull())
-        return plutovg_font_face_text_extents(m_face.get(), m_size, text.data(), text.length(), PLUTOVG_TEXT_ENCODING_UTF32, nullptr);
-    return 0;
+    return forEachTextRun(text, [&](plutovg_font_face_t* face, std::u32string_view run, float) {
+        return plutovg_font_face_text_extents(face, m_size, run.data(), run.length(), PLUTOVG_TEXT_ENCODING_UTF32, nullptr);
+    });
 }
 
 std::shared_ptr<Canvas> Canvas::create(const Bitmap& bitmap)
@@ -573,14 +575,23 @@ void Canvas::strokePath(const Path& path, const StrokeData& strokeData, const Tr
     plutovg_canvas_stroke_path(m_canvas, path.data());
 }
 
+static void addTextPath(plutovg_canvas_t* canvas, const std::u32string_view& text, const Font& font, const Point& origin)
+{
+    plutovg_canvas_new_path(canvas);
+    font.forEachTextRun(text, [&](plutovg_font_face_t* face, std::u32string_view run, float advance) {
+        plutovg_canvas_set_font(canvas, face, font.size());
+        return plutovg_canvas_add_text(canvas, run.data(), run.length(), PLUTOVG_TEXT_ENCODING_UTF32, origin.x + advance, origin.y);
+    });
+}
+
 void Canvas::fillText(const std::u32string_view& text, const Font& font, const Point& origin, const Transform& transform)
 {
     plutovg_canvas_set_matrix(m_canvas, &m_translation);
     plutovg_canvas_transform(m_canvas, &transform.matrix());
     plutovg_canvas_set_fill_rule(m_canvas, PLUTOVG_FILL_RULE_NON_ZERO);
     plutovg_canvas_set_operator(m_canvas, PLUTOVG_OPERATOR_SRC_OVER);
-    plutovg_canvas_set_font(m_canvas, font.face().get(), font.size());
-    plutovg_canvas_fill_text(m_canvas, text.data(), text.length(), PLUTOVG_TEXT_ENCODING_UTF32, origin.x, origin.y);
+    addTextPath(m_canvas, text, font, origin);
+    plutovg_canvas_fill(m_canvas);
 }
 
 void Canvas::strokeText(const std::u32string_view& text, float strokeWidth, const Font& font, const Point& origin, const Transform& transform)
@@ -594,8 +605,8 @@ void Canvas::strokeText(const std::u32string_view& text, float strokeWidth, cons
     plutovg_canvas_set_dash_offset(m_canvas, 0.f);
     plutovg_canvas_set_dash_array(m_canvas, nullptr, 0);
     plutovg_canvas_set_operator(m_canvas, PLUTOVG_OPERATOR_SRC_OVER);
-    plutovg_canvas_set_font(m_canvas, font.face().get(), font.size());
-    plutovg_canvas_stroke_text(m_canvas, text.data(), text.length(), PLUTOVG_TEXT_ENCODING_UTF32, origin.x, origin.y);
+    addTextPath(m_canvas, text, font, origin);
+    plutovg_canvas_stroke(m_canvas);
 }
 
 void Canvas::clipPath(const Path& path, FillRule clipRule, const Transform& transform)

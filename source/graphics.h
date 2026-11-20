@@ -425,6 +425,12 @@ public:
     void setResolver(lunasvg_font_face_resolver_t resolver, void* closure) { m_resolver = resolver; m_weightedResolver = nullptr; m_closure = closure; }
     void setWeightedResolver(lunasvg_weighted_font_face_resolver_t resolver, void* closure) { m_weightedResolver = resolver; m_resolver = nullptr; m_closure = closure; }
 
+    void setGlyphResolver(lunasvg_glyph_face_resolver_t resolver, void* closure) { m_glyphResolver = resolver; m_glyphClosure = closure; }
+    bool hasGlyphResolver() const { return m_glyphResolver != nullptr; }
+    FontFace getGlyphFace(const std::string& families, int weight, bool italic, uint32_t cp) const {
+        return FontFace(m_glyphResolver(m_glyphClosure, families.c_str(), weight, italic, cp));
+    }
+
     ~FontFaceCache();
 
 private:
@@ -433,6 +439,8 @@ private:
     lunasvg_font_face_resolver_t m_resolver = nullptr;
     lunasvg_weighted_font_face_resolver_t m_weightedResolver = nullptr;
     void* m_closure = nullptr;
+    lunasvg_glyph_face_resolver_t m_glyphResolver = nullptr;
+    void* m_glyphClosure = nullptr;
     friend FontFaceCache* fontFaceCache();
 };
 
@@ -441,7 +449,7 @@ FontFaceCache* fontFaceCache();
 class Font {
 public:
     Font() = default;
-    Font(const FontFace& face, float size);
+    Font(const FontFace& face, float size, const std::string& families, int weight, bool italic);
 
     float ascent() const { return m_ascent; }
     float descent() const { return m_descent; }
@@ -451,6 +459,34 @@ public:
 
     float measureText(const std::u32string_view& text) const;
 
+    template<typename UseRun>
+    float forEachTextRun(std::u32string_view text, UseRun&& useRun) const {
+        if(text.empty() || isNull())
+            return 0.f;
+        auto* cache = fontFaceCache();
+        if(!cache->hasGlyphResolver())
+            return useRun(m_face.get(), text, 0.f);
+
+        size_t start = 0;
+        float advance = 0.f;
+        auto* face = m_face.get();
+        FontFace runFallback;
+        for(size_t i = 0; i < text.size(); ++i) {
+            FontFace fallback;
+            if(!plutovg_font_face_get_glyph_index(m_face.get(), text[i]))
+                fallback = cache->getGlyphFace(m_families, m_weight, m_italic, text[i]);
+            auto* selected = fallback.isNull() ? m_face.get() : fallback.get();
+            if(selected != face) {
+                if(i > start)
+                    advance += useRun(face, text.substr(start, i - start), advance);
+                runFallback = std::move(fallback);
+                face = selected;
+                start = i;
+            }
+        }
+        return advance + useRun(face, text.substr(start), advance);
+    }
+
     const FontFace& face() const { return m_face; }
     float size() const { return m_size; }
 
@@ -458,6 +494,9 @@ public:
 
 private:
     FontFace m_face;
+    std::string m_families;
+    int m_weight = 400;
+    bool m_italic = false;
     float m_size = 0.f;
     float m_ascent = 0.f;
     float m_descent = 0.f;

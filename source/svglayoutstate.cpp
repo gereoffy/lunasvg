@@ -594,7 +594,7 @@ Font SVGLayoutState::font() const
 
     if(face.isNull())
         face = fontFaceCache()->getFontFace(emptyString, m_font_weight, italic);
-    return Font(face, m_font_size);
+    return Font(face, m_font_size, m_font_family, m_font_weight, italic);
 }
 
 } // namespace lunasvg

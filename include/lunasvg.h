@@ -149,6 +149,11 @@ LUNASVG_API void lunasvg_set_font_face_resolver(lunasvg_font_face_resolver_t res
 typedef plutovg_font_face_t* (*lunasvg_weighted_font_face_resolver_t)(void* closure, const char* family, int weight, bool italic);
 LUNASVG_API void lunasvg_set_weighted_font_face_resolver(lunasvg_weighted_font_face_resolver_t resolver, void* closure);
 
+/** Optional fallback for a missing glyph. Receives the CSS family list and requested style.
+ * Return a face containing the code point, or NULL. LunaSVG takes its own reference. */
+typedef plutovg_font_face_t* (*lunasvg_glyph_face_resolver_t)(void* closure, const char* families, int weight, bool italic, uint32_t codepoint);
+LUNASVG_API void lunasvg_set_glyph_face_resolver(lunasvg_glyph_face_resolver_t resolver, void* closure);
+
 #ifdef __cplusplus
 }
 #endif
